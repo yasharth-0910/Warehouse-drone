@@ -1,21 +1,26 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 package_name = 'wd_task_1a'
 
 setup(
     name=package_name,
     version='0.0.0',
-    packages=[package_name],
+    packages=find_packages(),
+    py_modules=[
+        'task_1a_2392',
+    ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='your_name',
-    maintainer_email='your_email@example.com',
-    description='Task 1A for Warehouse Drone',
-    license='TODO',
-    tests_require=['pytest'],
+    maintainer='Your Name',
+    maintainer_email='your_email@domain.com',
+    description='ROS2 package for Task 1A',
+    license='Apache License 2.0',
     entry_points={
         'console_scripts': [
-            'task_1a_2392 = wd_task_1a.task_1a_2392:main',  # Main entry point for your script
+            'task_1a_2392 = task_1a_2392:main',
         ],
+    },
+    package_data={
+        package_name: ['package.xml'],  # Include package.xml
     },
 )

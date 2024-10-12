@@ -1,166 +1,134 @@
-#!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
 from turtlesim.srv import TeleportAbsolute, SetPen
-import math
-import time
+from geometry_msgs.msg import Twist
+from math import sqrt, atan2, pi
 
-class TurtleController(Node):
+class DroneTurtleSim(Node):
     def __init__(self):
-        super().__init__('turtle_controller')
-
-        # Publisher to control the turtle's velocity
-        self.publisher_ = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
-
-        # Clients for teleporting and setting pen
-        self.teleport_client = self.create_client(TeleportAbsolute, '/turtle1/teleport_absolute')
-        while not self.teleport_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for /turtle1/teleport_absolute service...')
-
-        self.pen_client = self.create_client(SetPen, '/turtle1/set_pen')
-        while not self.pen_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for /turtle1/set_pen service...')
-
-        # Set pen properties (optional)
-        self.set_pen(255, 255, 255, 2, 0)  # White color, thickness 2, off (not erased)
+        super().__init__('drone_turtle_sim')
+        self.pen_srv = self.create_client(SetPen, '/turtle1/set_pen')
+        self.teleport_srv = self.create_client(TeleportAbsolute, '/turtle1/teleport_absolute')
+        self.cmd_vel_pub = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
+        self.draw_drone()
 
     def set_pen(self, r, g, b, width, off):
-        """Set the pen properties."""
-        pen_request = SetPen.Request()
-        pen_request.r = r
-        pen_request.g = g
-        pen_request.b = b
-        pen_request.width = width
-        pen_request.off = off
-
-        future = self.pen_client.call_async(pen_request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            self.get_logger().info(f'Set pen to RGB({r}, {g}, {b}) with width {width}')
-        else:
-            self.get_logger().error('Failed to set pen')
+        """ Set the pen color, width, and toggle on/off """
+        req = SetPen.Request()
+        req.r = r
+        req.g = g
+        req.b = b
+        req.width = width
+        req.off = off
+        self.pen_srv.call_async(req)
 
     def teleport(self, x, y, theta):
-        """Teleport the turtle to a specific (x, y) position with orientation theta."""
-        teleport_request = TeleportAbsolute.Request()
-        teleport_request.x = x
-        teleport_request.y = y
-        teleport_request.theta = theta
+        """ Teleport turtle to specific coordinates without drawing """
+        req = TeleportAbsolute.Request()
+        req.x = x
+        req.y = y
+        req.theta = theta
+        self.teleport_srv.call_async(req)
+        self.get_logger().info(f"Teleporting to: x={x}, y={y}, theta={theta}")
 
-        future = self.teleport_client.call_async(teleport_request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            self.get_logger().info(f'Teleported to ({x}, {y}, {theta})')
-        else:
-            self.get_logger().error('Failed to teleport')
-
-    def draw_circle(self, radius=1.0, speed=1.0):
-        """Draw a circle with the given radius and speed."""
+    def draw_circle(self, center_x, center_y, radius, speed):
+        """ Draw a circle with the given center and radius """
+        # Offset by radius to start from the top of the circle
+        start_x = center_x
+        start_y = center_y - radius
+        
+        # Teleport to the starting point
+        self.set_pen(0, 0, 0, 3, 1)  # Turn off pen
+        self.teleport(start_x, start_y, 0.0)
+        
+        self.set_pen(255, 255, 255, 3, 0)  # Turn on pen
         twist = Twist()
         twist.linear.x = speed
-        twist.angular.z = speed / radius  # v = r * omega => omega = v / r
+        twist.angular.z = speed / radius  # omega = linear speed / radius
 
-        duration = 2 * math.pi * radius / speed  # Time to complete the circle
-        self.get_logger().info(f'Drawing circle: radius={radius}, duration={duration:.2f}s')
+        total_angle = 2 * pi  # Complete one full circle
+        t_start = self.get_clock().now()
+        time_needed = total_angle / twist.angular.z  # Time to complete the circle
 
-        start_time = self.get_clock().now().seconds_nanoseconds()[0] + self.get_clock().now().seconds_nanoseconds()[1] / 1e9
-        end_time = start_time + duration
+        self.get_logger().info(f"Starting to draw circle with center ({center_x}, {center_y}) and radius {radius}")
 
-        while True:
-            current_time = self.get_clock().now().seconds_nanoseconds()[0] + self.get_clock().now().seconds_nanoseconds()[1] / 1e9
-            if current_time >= end_time:
-                break
-            self.publisher_.publish(twist)
-            time.sleep(0.1)  # Publish at 10 Hz
+        # Publish twist messages to move the turtle in a circle
+        while (self.get_clock().now() - t_start).nanoseconds / 1e9 < time_needed:
+            self.cmd_vel_pub.publish(twist)
 
-        # Stop the turtle after drawing
-        self.stop_turtle()
-
-    def move_straight(self, distance=2.0, speed=2.0):
-        """Move the turtle straight for a certain distance at a given speed."""
-        twist = Twist()
-        twist.linear.x = speed
-        twist.angular.z = 0.0
-
-        duration = distance / speed  # Time to move the distance
-        self.get_logger().info(f'Moving straight: distance={distance}, duration={duration:.2f}s')
-
-        start_time = self.get_clock().now().seconds_nanoseconds()[0] + self.get_clock().now().seconds_nanoseconds()[1] / 1e9
-        end_time = start_time + duration
-
-        while True:
-            current_time = self.get_clock().now().seconds_nanoseconds()[0] + self.get_clock().now().seconds_nanoseconds()[1] / 1e9
-            if current_time >= end_time:
-                break
-            self.publisher_.publish(twist)
-            time.sleep(0.1)  # Publish at 10 Hz
-
-        # Stop the turtle after moving
-        self.stop_turtle()
-
-    def stop_turtle(self):
-        """Stop the turtle's movement."""
-        twist = Twist()
         twist.linear.x = 0.0
         twist.angular.z = 0.0
-        self.publisher_.publish(twist)
-        time.sleep(1)  # Ensure the turtle stops
+        self.cmd_vel_pub.publish(twist)
 
-    def execute(self):
-        """Execute the drawing sequence."""
-        # 1. Draw Four Circles (Propellers)
-        propellers = [(2.0, 2.0), (2.0, 8.0), (8.0, 8.0), (8.0, 2.0)]
-        for idx, (x, y) in enumerate(propellers, start=1):
-            self.teleport(x, y, 0.0)  # Teleport to propeller center
-            self.draw_circle(radius=1.0, speed=1.0)  # Draw circle with radius 1.0
-            self.get_logger().info(f'Completed drawing propeller {idx}')
-            time.sleep(1)
+    def draw_line(self, x_start, y_start, x_end, y_end):
+        """ Draw a line from (x_start, y_start) to (x_end, y_end) using cmd_vel """
+        self.set_pen(255, 255, 255, 3, 1)  # Turn off pen for teleport
+        self.teleport(x_start, y_start, 0.0)  # Teleport to start position
+        self.set_pen(255, 255, 255, 3, 0)  # Turn on pen for drawing
 
-        # 2. Draw the Square Frame
-        square_vertices = [(3.0, 5.0), (5.0, 7.0), (7.0, 5.0), (5.0, 3.0)]
-        self.teleport(*square_vertices[0], 0.0)  # Teleport to first vertex
-        self.get_logger().info('Starting to draw the square frame')
+        # Calculate the distance and angle to move in a straight line
+        delta_x = x_end - x_start
+        delta_y = y_end - y_start
+        distance = sqrt(delta_x**2 + delta_y**2)
+        angle = atan2(delta_y, delta_x)
 
-        for idx, vertex in enumerate(square_vertices):
-            next_vertex = square_vertices[(idx + 1) % len(square_vertices)]
-            self.move_to_point(vertex, next_vertex, 2.0)  # Move turtle from current to next vertex
-            self.get_logger().info(f'Drew line from {vertex} to {next_vertex}')
-            time.sleep(1)
+        # Set up velocity commands for linear motion
+        twist = Twist()
+        twist.linear.x = 1.0  # Set a constant speed for straight motion
+        twist.angular.z = 0.0  # No rotation needed
 
-        # 3. Draw Connecting Lines to Complete the Frame
-        midpoints = [(4.0, 6.0), (6.0, 6.0), (6.0, 4.0), (4.0, 4.0)]
-        self.get_logger().info('Starting to draw connecting lines')
-        for idx, (x, y) in enumerate(midpoints, start=1):
-            self.teleport(x, y, 0.0)  # Teleport to the midpoint
-            self.move_straight(distance=2.0, speed=2.0)  # Draw line to center
-            self.get_logger().info(f'Drew connecting line {idx} to center')
-            time.sleep(1)
+        # First, rotate to the correct angle
+        self.set_pen(255, 255, 255, 3, 1)  # Turn off pen to rotate
+        self.teleport(x_start, y_start, angle)  # Teleport to start, facing the right direction
+        self.set_pen(255, 255, 255, 3, 0)  # Turn on pen again for drawing
 
-        # 4. Move Turtle to the Center
-        self.teleport(5.0, 5.0, 0.0)
-        self.get_logger().info('Turtle returned to the center (5.0, 5.0)')
+        # Calculate time to move the required distance
+        time_needed = distance / twist.linear.x
+        t_start = self.get_clock().now()
 
+        # Publish velocity commands to move in a straight line for the calculated time
+        while (self.get_clock().now() - t_start).nanoseconds / 1e9 < time_needed:
+            self.cmd_vel_pub.publish(twist)
 
+        # Stop the turtle after reaching the endpoint
+        twist.linear.x = 0.0
+        self.cmd_vel_pub.publish(twist)
+
+        self.get_logger().info(f"Drawing line from ({x_start}, {y_start}) to ({x_end}, {y_end})")
+
+    def draw_drone(self):
+        # Drawing the drone propellers (circles)
+        self.draw_circle(2.0, 2.0, 1.0, 1.0)
+        self.draw_circle(2.0, 8.0, 1.0, 1.0)
+        self.draw_circle(8.0, 8.0, 1.0, 1.0)
+        self.draw_circle(8.0, 2.0, 1.0, 1.0)
+
+        # Drawing the square with the given vertices
+        self.draw_line(3.0, 5.0, 5.0, 7.0)
+        self.draw_line(5.0, 7.0, 7.0, 5.0)
+        self.draw_line(7.0, 5.0, 5.0, 3.0)
+        self.draw_line(5.0, 3.0, 3.0, 5.0)
+
+        # Drawing the connecting lines
+        self.draw_line(2.0, 2.0, 4.0, 4.0)
+        self.draw_line(2.0, 8.0, 4.0, 6.0)
+        self.draw_line(8.0, 8.0, 6.0, 6.0)
+        self.draw_line(8.0, 2.0, 6.0, 4.0)
+
+        # Teleport turtle to the center of the square
+        self.set_pen(0, 0, 0, 3, 1)
+        self.move_to(5.0, 5.0)
+
+    def move_to(self, x, y):
+        """ Teleport turtle to a specific point """
+        self.teleport(x, y, 0.0)
+        self.get_logger().info(f"Teleported to: x={x}, y={y}")
 
 def main(args=None):
-    print("Starting Task 1A...")  # Task Start Message
-
     rclpy.init(args=args)
-
-    turtle_controller = TurtleController()
-
-    # Give some time for setup
-    time.sleep(2)
-
-    try:
-        turtle_controller.execute()
-    except KeyboardInterrupt:
-        turtle_controller.get_logger().info('Interrupted by user')
-    finally:
-        turtle_controller.destroy_node()
-        rclpy.shutdown()
+    node = DroneTurtleSim()
+    rclpy.spin(node)
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
